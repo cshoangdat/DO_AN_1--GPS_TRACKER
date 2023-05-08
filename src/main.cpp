@@ -9,6 +9,8 @@
 #include <Wire.h>
 #include "SoftwareSerial.h"
 #include <ArduinoHttpClient.h>
+#include "soc/soc.h"           // Disable brownour problems
+#include "soc/rtc_cntl_reg.h"  // Disable brownour problems
 
 #define SCL 22
 #define SDA 21
@@ -289,7 +291,6 @@ void gps_task()
     }
   }
   if(newData == true){
-      // if(gps.location.isValid()){
          latitude = gps.location.lat();
          longitude = gps.location.lng();
          speed = gps.speed.kmph();
@@ -472,6 +473,52 @@ void geo_fencing(int max_distance, float distance){
   u8g2.print((String)distance);
   u8g2.sendBuffer();
 }
+void login_loading(){
+  u8g2.setFont(u8g2_font_8x13B_mr);
+  u8g2.clearBuffer();
+  u8g2.drawStr(10,30,"LOGIN");
+  u8g2.drawStr(10,45,"LOADING...");
+  u8g2.sendBuffer();
+}
+void login_done(){
+  u8g2.setFont(u8g2_font_8x13B_mr);
+  u8g2.clearBuffer();
+  u8g2.drawStr(25,15,"WELCOME TO");
+  u8g2.drawStr(25,30,"NAVIGATION");
+  u8g2.drawStr(40,45,"SYSTEM");
+  u8g2.drawStr(20,60,"BY DAT HOANG");
+  u8g2.sendBuffer();
+}
+void menu_loading(){
+  u8g2.setFont(u8g2_font_8x13B_mr);
+  u8g2.clearBuffer();
+  u8g2.drawStr(50,15,"MENU");
+  u8g2.drawStr(10,35,"1. GPS Tracker");
+  u8g2.drawStr(10,55,"2. GEO Fencing");
+  u8g2.sendBuffer();
+}
+void tracker_loading(){
+  u8g2.setFont(u8g2_font_8x13B_mr);
+  u8g2.clearBuffer();
+  u8g2.drawStr(10,30,"GPS TRACKER");
+  u8g2.drawStr(10,45,"LOADING...");
+  u8g2.sendBuffer();
+}
+void fencing_loading(){
+  u8g2.setFont(u8g2_font_8x13B_mr);
+  u8g2.clearBuffer();
+  u8g2.drawStr(10,30,"GEO FENCING");
+  u8g2.drawStr(10,45,"LOADING...");
+  u8g2.sendBuffer();
+}
+void finding_satellite(){
+  u8g2.setFont(u8g2_font_t0_12b_mf);
+  u8g2.clearBuffer();
+  u8g2.drawBitmap(1, 12,6,48,satellite_BMP_64x64);
+  u8g2.drawStr(55,30,"Finding");
+  u8g2.drawStr(55,45,"Satellites...");
+  u8g2.sendBuffer();
+}
 
 void login_get(){
   getFormFirebase_realNum("Login/Phone_num", &http_client);
@@ -483,11 +530,12 @@ void login_get(){
 }
 
 void setup() {
+  Serial.begin(115200);
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); //disable brownout detector
   pinMode(buttonSMS, INPUT);
   pinMode(buttonCall, INPUT);
   pinMode(BUZZER,OUTPUT);
   digitalWrite(BUZZER, LOW);
-  Serial.begin(115200);
   delay(10);
   sim800.begin(9600, SERIAL_8N1, RXD2, TXD2);
   delay(10);
@@ -542,7 +590,7 @@ void loop() {
         is_login = new_response.toInt();
         Serial.print("Is Login: ");
         Serial.println(is_login);
-          if(is_login == 1 || is_menu == 1 || buttonCall_isPress == 1 || buttonSMS_isPress == 1) break;      
+        if(is_login == 1 || is_menu == 1 || buttonCall_isPress == 1 || buttonSMS_isPress == 1) break;      
       }
 
       while(is_login == 1 && is_menu == 0) {
@@ -554,10 +602,10 @@ void loop() {
         Data += "}";
         postToFirebase("PATCH", "Done", Data, &http_client);
         getFormFirebase_state("State/Is_Menu",&http_client);
-        is_menu = new_response.toInt();;
+        is_menu = new_response.toInt();
         Serial.print("Is Menu: ");
         Serial.println(is_menu);
-          if(is_menu == 1 || buttonCall_isPress == 1 || buttonSMS_isPress == 1) break;
+        if(is_menu == 1 || buttonCall_isPress == 1 || buttonSMS_isPress == 1) break;
         is_login = 0;
       }
 
@@ -575,35 +623,35 @@ void loop() {
       }
       //Tinh nang 1+2: GPS Tracker + Speedometer
       //----------------------------------------------------------------
-        while(is_tracking == 1) {
-          gps_task();
-          unsigned long current_time = millis();
-          if(current_time - display_time >= 2000){
-            display_time = current_time;
-            current_display++;
-            if(current_display > 3) current_display = 1;
-            if(current_display == 1){
-              tracker();
-            }
-            else if(current_display == 2){
-                needle_pos = map(speed,0,200,0,90); //SET NEEDLE
-                // show needle and dial
-                xx = needle_pos;                                    
-                if (xx<45)
-                  {xx=xx+135;}
-                else
-                  {xx=xx-45;} 
-                //----------------------------------------------------------
-                //Display Data on Oled
-                {
-                  u8g2.firstPage(); 
-                  do {             
-                    gauge(xx);
-                  }
-                  while( u8g2.nextPage() );
-                }
-            }
+      while(is_tracking == 1) {
+        gps_task();
+        unsigned long current_time = millis();
+        if(current_time - display_time >= 2000){
+          display_time = current_time;
+          current_display++;
+          if(current_display > 3) current_display = 1;
+          if(current_display == 1){
+            tracker();
           }
+          else if(current_display == 2){
+              needle_pos = map(speed,0,200,0,90); //SET NEEDLE
+              // show needle and dial
+              xx = needle_pos;                                    
+              if (xx<45)
+                {xx=xx+135;}
+              else
+                {xx=xx-45;} 
+              //----------------------------------------------------------
+              //Display Data on Oled
+              {
+                u8g2.firstPage(); 
+                do {             
+                  gauge(xx);
+                }
+                while( u8g2.nextPage() );
+              }
+          }
+        }
         getFormFirebase_state("State/Is_Menu",&http_client);
         is_menu = new_response.toInt();;
         Serial.print("Is Menu: ");
@@ -612,106 +660,107 @@ void loop() {
         }
       //Tinh nang 3: Geo Fencing
       //----------------------------------------------------------------
-        while(is_fencing == 1){
-          getFormFirebase_state("State/Is_Fencing_Install",&http_client);
-          is_fencing_install = new_response.toInt();
-          Serial.print("Is Fencing Install: ");
-          Serial.println(is_fencing_install);
-          init_lat = 0;
-          init_long = 0;
-          max_distance = 0;
+      while(is_fencing == 1){
+        getFormFirebase_state("State/Is_Fencing_Install",&http_client);
+        is_fencing_install = new_response.toInt();
+        Serial.print("Is Fencing Install: ");
+        Serial.println(is_fencing_install);
+        init_lat = 0;
+        init_long = 0;
+        max_distance = 0;
 
-            while(is_fencing_install == 1){
-              if(init_lat == 0){
-                getFormFirebase_realNum("Fencing/init_lat",&http_client);
-                init_lat = new_response.toFloat();
-                Serial.print("Init lat: ");
-                Serial.println(init_lat,6);
-              }
-              if(init_long == 0){
-                getFormFirebase_realNum("Fencing/init_long",&http_client);
-                init_long = new_response.toFloat();
-                Serial.println("Init long: ");
-                Serial.println(init_long,6);
-              }
-              if(max_distance == 0){
-                getFormFirebase_realNum("Fencing/max_dist",&http_client);
-                max_distance = new_response.toInt();
-                Serial.println("Max Distance: ");
-                Serial.println(max_distance);
-              }
-              if(init_lat != 0 && init_long !=0 && max_distance != 0){
-                getFormFirebase_state("State/Is_Fencing_Install",&http_client);
-                is_fencing_install = new_response.toInt();
-                Serial.print("Is Fencing Install: ");
-                Serial.println(is_fencing_install);
-              }
-              getFormFirebase_state("State/Is_Menu",&http_client);
-              is_menu = new_response.toInt();;
-              Serial.print("Is Menu: ");
-              Serial.println(is_menu);
-
-                if(buttonCall_isPress == 1 || buttonSMS_isPress == 1 || is_menu == 1) break;
+          while(is_fencing_install == 1){
+            if(init_lat == 0){
+              getFormFirebase_realNum("Fencing/init_lat",&http_client);
+              init_lat = new_response.toFloat();
+              Serial.print("Init lat: ");
+              Serial.println(init_lat,6);
             }
-
-            getFormFirebase_state("State/Is_Fencing_Running",&http_client);
-            is_fencing_running = new_response.toInt();
-            Serial.print("Is fencing_Running: ");
-            Serial.println(is_fencing_running);
-            
-            while(is_fencing_running == 1){
-              gps_task();
-              distance = getDistance(latitude, longitude, init_lat, init_long);
-                if(distance > max_distance) {
-                  if(alarm_on == true){
-                    digitalWrite(BUZZER, HIGH);
-                    send_alert();
-                    alarm_handle = true;
-                    alarm_on = false;
-                    buzzer_time = millis();
-                  }
-                }
-                else{
-                  alarm_on = true;
-                }
-                if (alarm_handle == true) {
-                  if (millis() - buzzer_time > 1000) {
-                    digitalWrite(BUZZER, LOW);
-                    alarm_handle = false;
-                    buzzer_time = 0;
-                  }
-                }
-              String f = (String)distance;
-              delay(100);
-              Serial.println(f);
-              String Data = "{";
-              Data += "\"dist\":" + f + "";
-              Data += "}";
-              postToFirebase("PATCH", "Distance", Data, &http_client);
-              Serial.print("current Distance= "); Serial.println(distance);
-              geo_fencing(max_distance,distance);
-
+            if(init_long == 0){
+              getFormFirebase_realNum("Fencing/init_long",&http_client);
+              init_long = new_response.toFloat();
+              Serial.println("Init long: ");
+              Serial.println(init_long,6);
+            }
+            if(max_distance == 0){
+              getFormFirebase_realNum("Fencing/max_dist",&http_client);
+              max_distance = new_response.toInt();
+              Serial.println("Max Distance: ");
+              Serial.println(max_distance);
+            }
+            if(init_lat != 0 && init_long !=0 && max_distance != 0){
               getFormFirebase_state("State/Is_Fencing_Install",&http_client);
               is_fencing_install = new_response.toInt();
               Serial.print("Is Fencing Install: ");
               Serial.println(is_fencing_install);
-
-              getFormFirebase_state("State/Is_Menu",&http_client);
-              is_menu = new_response.toInt();;
-              Serial.print("Is Menu: ");
-              Serial.println(is_menu); 
-
-              if(buttonCall_isPress == 1 || buttonSMS_isPress == 1 || is_fencing_install == 1 || is_menu == 1) break;
             }
-        getFormFirebase_state("State/Is_Menu",&http_client);
-        is_menu = new_response.toInt();;
-        Serial.print("Is Menu: ");
-        Serial.println(is_menu); 
-        if(buttonCall_isPress == 1 || buttonSMS_isPress == 1 || is_menu == 1) break;
+            getFormFirebase_state("State/Is_Menu",&http_client);
+            is_menu = new_response.toInt();;
+            Serial.print("Is Menu: ");
+            Serial.println(is_menu);
+
+              if(buttonCall_isPress == 1 || buttonSMS_isPress == 1 || is_menu == 1) break;
+          }
+
+          getFormFirebase_state("State/Is_Fencing_Running",&http_client);
+          is_fencing_running = new_response.toInt();
+          Serial.print("Is fencing_Running: ");
+          Serial.println(is_fencing_running);
+          
+          while(is_fencing_running == 1){
+            gps_task();
+            distance = getDistance(latitude, longitude, init_lat, init_long);
+              if(distance > max_distance) {
+                if(alarm_on == true){
+                  digitalWrite(BUZZER, HIGH);
+                  send_alert();
+                  alarm_handle = true;
+                  alarm_on = false;
+                  buzzer_time = millis();
+                }
+              }
+              else{
+                alarm_on = true;
+              }
+              if (alarm_handle == true) {
+                if (millis() - buzzer_time > 1000) {
+                  digitalWrite(BUZZER, LOW);
+                  alarm_handle = false;
+                  buzzer_time = 0;
+                }
+              }
+            String f = (String)distance;
+            delay(100);
+            Serial.println(f);
+            String Data = "{";
+            Data += "\"dist\":" + f + "";
+            Data += "}";
+            postToFirebase("PATCH", "Distance", Data, &http_client);
+            Serial.print("current Distance= "); Serial.println(distance);
+            geo_fencing(max_distance,distance);
+
+            getFormFirebase_state("State/Is_Fencing_Install",&http_client);
+            is_fencing_install = new_response.toInt();
+            Serial.print("Is Fencing Install: ");
+            Serial.println(is_fencing_install);
+
+            getFormFirebase_state("State/Is_Menu",&http_client);
+            is_menu = new_response.toInt();;
+            Serial.print("Is Menu: ");
+            Serial.println(is_menu); 
+
+            if(buttonCall_isPress == 1 || buttonSMS_isPress == 1 || is_fencing_install == 1 || is_menu == 1) break;
+          }
+          getFormFirebase_state("State/Is_Menu",&http_client);
+          is_menu = new_response.toInt();;
+          Serial.print("Is Menu: ");
+          Serial.println(is_menu); 
+          if(buttonCall_isPress == 1 || buttonSMS_isPress == 1 || is_menu == 1) break;
         }
     }
       //Truong hop khan cap
       if(buttonCall_isPress){
+        buttonCall_isPress = false;
         while(latitude == 0 || longitude == 0){
           while(neogps.available()){
               gps.encode(neogps.read());
@@ -720,9 +769,9 @@ void loop() {
             }
         }
         call_emergency();
-        buttonCall_isPress = false;
       }
       if(buttonSMS_isPress){
+        buttonSMS_isPress = false;
         while(latitude == 0 || longitude == 0){
           while(neogps.available()){
               gps.encode(neogps.read());
@@ -731,7 +780,6 @@ void loop() {
             }
         }
         SMS_emergency();
-        buttonSMS_isPress = false;
       }
     //----------------------------------------------------------------
     }
