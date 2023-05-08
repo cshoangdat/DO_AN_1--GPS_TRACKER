@@ -21,13 +21,13 @@
 #define RXD2 16
 #define TXD2 17
 
-#define buttonSMS 15
-#define buttonCall 4
+#define buttonSMS 12 //15
+#define buttonCall 14 //4
 
-#define BUZZER 2
+#define BUZZER 13 //2
 
-const char FIREBASE_HOST[] = "navigation-app-1bf90-default-rtdb.firebaseio.com";
-const String FIREBASE_AUTH = "jnVL3qNxLQRHP17bcsOCOkrz962IpfDaFiUbSkGq";
+const char FIREBASE_HOST[] = "doan1-9ef77-default-rtdb.firebaseio.com";
+const String FIREBASE_AUTH = "4KXFid9UqhMPbiCvnzdVJRThmseX6rsCJBlqNQt7";
 const String FIREBASE_PATH = "data";
 const int SSL_PORT = 443;
 
@@ -55,13 +55,16 @@ boolean buttonCall_isPress = false;
 boolean alarm_on = false;
 boolean alarm_handle = false;
 
-int is_login = 0;
-int is_menu = 0;
-int is_tracking = 0;
-int is_fencing = 0;
-int is_fencing_install = 0;
-int is_fencing_running = 0;
-int is_login_done = 0;
+bool is_login = 0;
+bool is_menu = 0;
+bool is_tracking = 0;
+bool is_fencing = 0;
+bool is_fencing_install = 0;
+bool is_fencing_running = 0;
+bool is_login_done = 0;
+bool is_fencing_install_done = 0;
+bool is_fencing_running_stop = 0;
+bool is_esp_load_done = 0;
 
 float init_lat = 0;
 float init_long = 0;
@@ -85,12 +88,6 @@ int needle_pos = 0;
 #define sat_logo_height 19
 #define logo_width 64
 #define logo_height 64
-
-//Display on OLED
-void tracker();
-void gauge(uint8_t angle);
-void geo_fencing(int max_distance, float distance);
-//----------------------------------------------------------------
 
 const unsigned char sat_logo[] = {
 0x00, 0x08, 0x00, 0x24, 0x00, 0x42, 0x00, 0x81, 0x00, 0x42, 0x07, 0xA4, 0x07, 0xC8, 0x0F, 0xD0,
@@ -175,13 +172,299 @@ const unsigned char distance_BMP_24x24 [] = {
 0x80, 0x00, 0x0F, 0x60, 0x00, 0x06, 0x40, 0x00, 
 };
 
+//Display on OLED
+void tracker();
+void gauge(uint8_t angle);
+void geo_fencing(int max_distance, float distance);
+void login_loading();
+void login_done();
+void menu_loading();
+void tracker_loading();
+void fencing_loading();
+void finding_satellite();
+void fencing_init();
+void fencing_run();
+//----------------------------------------------------------------
+
+//Emergency Situation
+void SMS_emergency();
+void call_emergency();
+//----------------------------------------------------------------
+
+//Firebase
+void postToFirebase(const char *method, const String &path, const String &data, HttpClient *http);
+void getFormFirebase_state(const String & path, HttpClient* http);
+void getFormFirebase_realNum(const String & path, HttpClient* http);
+//----------------------------------------------------------------
+
+//GPS Tracker
+void gps_task();
+//----------------------------------------------------------------
+//Geo Fencing
+float getDistance(float flat1, float flon1, float flat2, float flon2);
+void send_alert();
+//----------------------------------------------------------------
+
+//Interrupt
 void IRAM_ATTR isr1(){
   buttonSMS_isPress = true;
 }
 void IRAM_ATTR isr2(){
   buttonCall_isPress = true;
 }
+//----------------------------------------------------------------
+void setup() {
+  Serial.begin(115200);
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); //disable brownout detector
+  pinMode(buttonSMS, INPUT);
+  pinMode(buttonCall, INPUT);
+  pinMode(BUZZER,OUTPUT);
+  digitalWrite(BUZZER, LOW);
+  delay(10);
+  sim800.begin(9600, SERIAL_8N1, RXD2, TXD2);
+  delay(10);
+  neogps.begin(9600);
+  modem.restart();
+  String modemInfo = modem.getModemInfo();
+  Serial.print("Modem: ");
+  Serial.println(modemInfo);
+  http_client.setHttpResponseTimeout(10*1000);
 
+  u8g2.setBusClock(1000000);
+  u8g2.begin();
+  u8g2.setFont(u8g2_font_8x13B_mr);
+  u8g2.enableUTF8Print();
+  u8g2.setFontMode(1);
+  u8g2.clearBuffer();
+  u8g2.drawFrame(5,5,118,58);
+  u8g2.drawBitmap(12, 6, 5.25, 54, logo);
+  u8g2.drawStr(75,30,"GPS");
+  u8g2.drawStr(60,45,"TRACKER");
+  u8g2.sendBuffer();
+
+  attachInterrupt(buttonCall,isr1,RISING);
+  attachInterrupt(buttonSMS,isr2,RISING);
+}
+
+void loop() {
+  Serial.print(F("Connecting to "));
+  Serial.print(apn);
+  if (!modem.gprsConnect(apn, user, pass))
+  {
+    Serial.println(" fail");
+    delay(1000);
+    return;
+  }
+  Serial.println(" OK");
+  
+  http_client.connect(FIREBASE_HOST, SSL_PORT);
+  while (true) {
+    //Lay gia tri vi tri day len Firebase
+    if (!http_client.connected())
+    {
+      Serial.println();
+      http_client.stop();// Shutdown
+      Serial.println("HTTP not connect");
+      break;
+    }
+    else
+    {
+      while(is_login == 0){
+        getFormFirebase_state("State/Is_Login",&http_client);
+        is_login = new_response.toInt();
+        Serial.print("Is Login: ");
+        Serial.println(is_login);
+        login_loading();
+        if(is_login == 1 || is_menu == 1 || buttonCall_isPress == 1 || buttonSMS_isPress == 1) break;      
+      }
+
+      while(is_login == 1 && is_menu == 0) {
+        getFormFirebase_realNum("Login/Phone_num", &http_client);
+        MY_PHONE_NUMBER = new_response;
+        Serial.println("My phone number: "+ MY_PHONE_NUMBER);
+        getFormFirebase_realNum("Login/Rel_Phone_num", &http_client);
+        REL_PHONE_NUMBER = new_response;
+        Serial.println("Rel phone number: "+ REL_PHONE_NUMBER);
+        delay(500);
+        is_login_done = 1;
+        String Data = "{";
+        Data += "\"Is_Login_Done\":" + (String)is_login_done + "";
+        Data += "}";
+        postToFirebase("PATCH", "Done", Data, &http_client);
+        getFormFirebase_state("State/Is_Menu",&http_client);
+        is_menu = new_response.toInt();
+        Serial.print("Is Menu: ");
+        Serial.println(is_menu);
+        login_done();
+        if(is_menu == 1 || buttonCall_isPress == 1 || buttonSMS_isPress == 1) break;
+        is_login = 0;
+      }
+
+      while(is_menu == 1) {
+        menu_loading();
+        digitalWrite(BUZZER, LOW);
+        getFormFirebase_state("State/Is_Tracking",&http_client);
+        is_tracking = new_response.toInt();
+        Serial.print("Is Tracking: ");
+        Serial.println(is_tracking);
+        getFormFirebase_state("State/Is_Fencing",&http_client);
+        is_fencing = new_response.toInt();
+        Serial.print("Is fencing: ");
+        Serial.println(is_fencing);
+        if(is_tracking == 1){
+          tracker_loading();
+          break;
+        }
+        if(is_fencing == 1){
+          fencing_loading();
+          break;
+        }
+        if(buttonCall_isPress == 1 || buttonSMS_isPress == 1) break;
+      }
+      //Tinh nang 1+2: GPS Tracker + Speedometer
+      //----------------------------------------------------------------
+      while(is_tracking == 1) {
+        gps_task();
+        unsigned long current_time = millis();
+        if(current_time - display_time >= 2000){
+          display_time = current_time;
+          current_display++;
+          if(current_display > 3) current_display = 1;
+          if(current_display == 1){
+            tracker();
+          }
+          else if(current_display == 2){
+              needle_pos = map(speed,0,200,0,90); //SET NEEDLE
+              // show needle and dial
+              xx = needle_pos;                                    
+              if (xx<45)
+                {xx=xx+135;}
+              else
+                {xx=xx-45;} 
+              //----------------------------------------------------------
+              //Display Data on Oled
+              {
+                u8g2.firstPage(); 
+                do {             
+                  gauge(xx);
+                }
+                while( u8g2.nextPage() );
+              }
+          }
+        }
+        getFormFirebase_state("State/Is_Menu",&http_client);
+        is_menu = new_response.toInt();;
+        Serial.print("Is Menu: ");
+        Serial.println(is_menu); 
+        if(buttonCall_isPress == 1 || buttonSMS_isPress == 1 || is_menu == 1) break;
+        }
+      //Tinh nang 3: Geo Fencing
+      //----------------------------------------------------------------
+      while(is_fencing == 1){
+       is_fencing_install = 1;
+          while(is_fencing_install == 1){
+            fencing_init();
+ 		        getFormFirebase_state("State/Is_Fencing_Install_Done",&http_client);
+            is_fencing_install_done = new_response.toInt();
+            Serial.print("Is fencing install done: ");
+            Serial.println(is_fencing_install_done);
+		          if(is_fencing_install_done == 1){
+                getFormFirebase_realNum("Fencing/init_lat",&http_client);
+                init_lat = new_response.toFloat();
+                Serial.print("Init lat: ");
+                Serial.println(init_lat,6);
+                getFormFirebase_realNum("Fencing/init_long",&http_client);
+                init_long = new_response.toFloat();
+                Serial.println("Init long: ");
+                Serial.println(init_long,6);
+                getFormFirebase_realNum("Fencing/max_dist",&http_client);
+                max_distance = new_response.toInt();
+                Serial.println("Max Distance: ");
+                Serial.println(max_distance);
+                is_esp_load_done = 1;
+                String Data = "{";
+                Data += "\"Is_Esp_Load_Done\":" + (String)is_esp_load_done + "";
+                Data += "}";
+                postToFirebase("PATCH", "Done", Data, &http_client);
+		            is_fencing_running = 1;
+		            break;
+		          }
+            getFormFirebase_state("State/Is_Menu",&http_client);
+            is_menu = new_response.toInt();;
+            Serial.print("Is Menu: ");
+            Serial.println(is_menu);
+
+            if(buttonCall_isPress == 1 || buttonSMS_isPress == 1 || is_menu == 1) break;
+          }
+          
+          while(is_fencing_running == 1){
+            gps_task();
+            distance = getDistance(latitude, longitude, init_lat, init_long);
+            geo_fencing(max_distance,distance);
+              if(distance > max_distance) {
+                  digitalWrite(BUZZER, HIGH);
+                  send_alert();
+                  alarm_handle = true;
+                  buzzer_time = millis();
+              }
+              if (alarm_handle == true) {
+                if (millis() - buzzer_time > 1000) {
+                  digitalWrite(BUZZER, LOW);
+                  alarm_handle = false;
+                  buzzer_time = 0;
+                }
+              }
+            String f = (String)distance;
+            delay(100);
+            Serial.println(f);
+            String Data = "{";
+            Data += "\"dist\":" + f + "";
+            Data += "}";
+            postToFirebase("PATCH", "Distance", Data, &http_client);
+            Serial.print("current Distance= "); Serial.println(distance);
+
+            getFormFirebase_state("State/Is_Fencing_Running_Stop",&http_client);
+            is_fencing_running_stop = new_response.toInt();
+            Serial.print("Is Fencing Running Stop: ");
+            Serial.println(is_fencing_running_stop);
+
+            getFormFirebase_state("State/Is_Menu",&http_client);
+            is_menu = new_response.toInt();
+            Serial.print("Is Menu: ");
+            Serial.println(is_menu); 
+
+            if(buttonCall_isPress == 1 || buttonSMS_isPress == 1 || is_menu == 1 || is_fencing_running_stop == 1) break;
+          }
+        if(buttonCall_isPress == 1 || buttonSMS_isPress == 1 || is_menu == 1) break;
+        }
+    }
+      //Truong hop khan cap
+      if(buttonCall_isPress){
+        buttonCall_isPress = false;
+        while(latitude == 0 || longitude == 0){
+          while(neogps.available()){
+              gps.encode(neogps.read());
+              latitude = gps.location.lat();
+              longitude = gps.location.lng();
+            }
+        }
+        call_emergency();
+      }
+      if(buttonSMS_isPress){
+        buttonSMS_isPress = false;
+        while(latitude == 0 || longitude == 0){
+          while(neogps.available()){
+              gps.encode(neogps.read());
+              latitude = gps.location.lat();
+              longitude = gps.location.lng();
+            }
+        }
+        SMS_emergency();
+      }
+    //----------------------------------------------------------------
+    }
+  }
+   //----------------------------------------------------------------
 void postToFirebase(const char *method, const String &path, const String &data, HttpClient *http){
   String response;
   int statusCode = 0;
@@ -520,268 +803,22 @@ void finding_satellite(){
   u8g2.sendBuffer();
 }
 
-void login_get(){
-  getFormFirebase_realNum("Login/Phone_num", &http_client);
-  MY_PHONE_NUMBER = new_response;
-  Serial.println("My phone number: "+ MY_PHONE_NUMBER);
-  getFormFirebase_realNum("Login/Rel_Phone_num", &http_client);
-  REL_PHONE_NUMBER = new_response;
-  Serial.println("Rel phone number: "+ REL_PHONE_NUMBER);
-}
-
-void setup() {
-  Serial.begin(115200);
-  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); //disable brownout detector
-  pinMode(buttonSMS, INPUT);
-  pinMode(buttonCall, INPUT);
-  pinMode(BUZZER,OUTPUT);
-  digitalWrite(BUZZER, LOW);
-  delay(10);
-  sim800.begin(9600, SERIAL_8N1, RXD2, TXD2);
-  delay(10);
-  neogps.begin(9600);
-  modem.restart();
-  String modemInfo = modem.getModemInfo();
-  Serial.print("Modem: ");
-  Serial.println(modemInfo);
-  http_client.setHttpResponseTimeout(10*1000);
-
-  u8g2.setBusClock(1000000);
-  u8g2.begin();
+void fencing_init(){
   u8g2.setFont(u8g2_font_8x13B_mr);
-  u8g2.enableUTF8Print();
-  u8g2.setFontMode(1);
   u8g2.clearBuffer();
-  u8g2.drawFrame(5,5,118,58);
-  u8g2.drawBitmap(12, 6, 5.25, 54, logo);
-  u8g2.drawStr(75,30,"GPS");
-  u8g2.drawStr(60,45,"TRACKER");
+  u8g2.drawStr(10,30,"Preparing for");
+  u8g2.drawStr(10,45,"GEO-Fencing...");
   u8g2.sendBuffer();
-
-  attachInterrupt(buttonCall,isr1,RISING);
-  attachInterrupt(buttonSMS,isr2,RISING);
+}
+void fencing_run(){
+  u8g2.setFont(u8g2_font_8x13B_mr);
+  u8g2.clearBuffer();
+  u8g2.drawStr(10,25,"Complete");
+  u8g2.drawStr(10,40,"preparing");
+  u8g2.drawStr(10,55,"Starting...");
+  u8g2.sendBuffer();
 }
 
-void loop() {
-  Serial.print(F("Connecting to "));
-  Serial.print(apn);
-  if (!modem.gprsConnect(apn, user, pass))
-  {
-    Serial.println(" fail");
-    delay(1000);
-    return;
-  }
-  Serial.println(" OK");
-  
-  http_client.connect(FIREBASE_HOST, SSL_PORT);
-  while (true) {
-    //Lay gia tri vi tri day len Firebase
-    if (!http_client.connected())
-    {
-      Serial.println();
-      http_client.stop();// Shutdown
-      Serial.println("HTTP not connect");
-      break;
-    }
-    else
-    {
-      while(is_login == 0){
-        getFormFirebase_state("State/Is_Login",&http_client);
-        is_login = new_response.toInt();
-        Serial.print("Is Login: ");
-        Serial.println(is_login);
-        if(is_login == 1 || is_menu == 1 || buttonCall_isPress == 1 || buttonSMS_isPress == 1) break;      
-      }
 
-      while(is_login == 1 && is_menu == 0) {
-        login_get();
-        delay(500);
-        is_login_done = 1;
-        String Data = "{";
-        Data += "\"Is_Login_Done\":" + (String)is_login_done + "";
-        Data += "}";
-        postToFirebase("PATCH", "Done", Data, &http_client);
-        getFormFirebase_state("State/Is_Menu",&http_client);
-        is_menu = new_response.toInt();
-        Serial.print("Is Menu: ");
-        Serial.println(is_menu);
-        if(is_menu == 1 || buttonCall_isPress == 1 || buttonSMS_isPress == 1) break;
-        is_login = 0;
-      }
 
-      while(is_menu == 1) {
-        digitalWrite(BUZZER, LOW);
-        getFormFirebase_state("State/Is_Tracking",&http_client);
-        is_tracking = new_response.toInt();
-        Serial.print("Is Tracking: ");
-        Serial.println(is_tracking);
-        getFormFirebase_state("State/Is_Fencing",&http_client);
-        is_fencing = new_response.toInt();
-        Serial.print("Is fencing: ");
-        Serial.println(is_fencing);
-        if(buttonCall_isPress == 1 || buttonSMS_isPress == 1 || is_fencing == 1 || is_tracking == 1) break;
-      }
-      //Tinh nang 1+2: GPS Tracker + Speedometer
-      //----------------------------------------------------------------
-      while(is_tracking == 1) {
-        gps_task();
-        unsigned long current_time = millis();
-        if(current_time - display_time >= 2000){
-          display_time = current_time;
-          current_display++;
-          if(current_display > 3) current_display = 1;
-          if(current_display == 1){
-            tracker();
-          }
-          else if(current_display == 2){
-              needle_pos = map(speed,0,200,0,90); //SET NEEDLE
-              // show needle and dial
-              xx = needle_pos;                                    
-              if (xx<45)
-                {xx=xx+135;}
-              else
-                {xx=xx-45;} 
-              //----------------------------------------------------------
-              //Display Data on Oled
-              {
-                u8g2.firstPage(); 
-                do {             
-                  gauge(xx);
-                }
-                while( u8g2.nextPage() );
-              }
-          }
-        }
-        getFormFirebase_state("State/Is_Menu",&http_client);
-        is_menu = new_response.toInt();;
-        Serial.print("Is Menu: ");
-        Serial.println(is_menu); 
-        if(buttonCall_isPress == 1 || buttonSMS_isPress == 1 || is_menu == 1) break;
-        }
-      //Tinh nang 3: Geo Fencing
-      //----------------------------------------------------------------
-      while(is_fencing == 1){
-        getFormFirebase_state("State/Is_Fencing_Install",&http_client);
-        is_fencing_install = new_response.toInt();
-        Serial.print("Is Fencing Install: ");
-        Serial.println(is_fencing_install);
-        init_lat = 0;
-        init_long = 0;
-        max_distance = 0;
 
-          while(is_fencing_install == 1){
-            if(init_lat == 0){
-              getFormFirebase_realNum("Fencing/init_lat",&http_client);
-              init_lat = new_response.toFloat();
-              Serial.print("Init lat: ");
-              Serial.println(init_lat,6);
-            }
-            if(init_long == 0){
-              getFormFirebase_realNum("Fencing/init_long",&http_client);
-              init_long = new_response.toFloat();
-              Serial.println("Init long: ");
-              Serial.println(init_long,6);
-            }
-            if(max_distance == 0){
-              getFormFirebase_realNum("Fencing/max_dist",&http_client);
-              max_distance = new_response.toInt();
-              Serial.println("Max Distance: ");
-              Serial.println(max_distance);
-            }
-            if(init_lat != 0 && init_long !=0 && max_distance != 0){
-              getFormFirebase_state("State/Is_Fencing_Install",&http_client);
-              is_fencing_install = new_response.toInt();
-              Serial.print("Is Fencing Install: ");
-              Serial.println(is_fencing_install);
-            }
-            getFormFirebase_state("State/Is_Menu",&http_client);
-            is_menu = new_response.toInt();;
-            Serial.print("Is Menu: ");
-            Serial.println(is_menu);
-
-              if(buttonCall_isPress == 1 || buttonSMS_isPress == 1 || is_menu == 1) break;
-          }
-
-          getFormFirebase_state("State/Is_Fencing_Running",&http_client);
-          is_fencing_running = new_response.toInt();
-          Serial.print("Is fencing_Running: ");
-          Serial.println(is_fencing_running);
-          
-          while(is_fencing_running == 1){
-            gps_task();
-            distance = getDistance(latitude, longitude, init_lat, init_long);
-              if(distance > max_distance) {
-                if(alarm_on == true){
-                  digitalWrite(BUZZER, HIGH);
-                  send_alert();
-                  alarm_handle = true;
-                  alarm_on = false;
-                  buzzer_time = millis();
-                }
-              }
-              else{
-                alarm_on = true;
-              }
-              if (alarm_handle == true) {
-                if (millis() - buzzer_time > 1000) {
-                  digitalWrite(BUZZER, LOW);
-                  alarm_handle = false;
-                  buzzer_time = 0;
-                }
-              }
-            String f = (String)distance;
-            delay(100);
-            Serial.println(f);
-            String Data = "{";
-            Data += "\"dist\":" + f + "";
-            Data += "}";
-            postToFirebase("PATCH", "Distance", Data, &http_client);
-            Serial.print("current Distance= "); Serial.println(distance);
-            geo_fencing(max_distance,distance);
-
-            getFormFirebase_state("State/Is_Fencing_Install",&http_client);
-            is_fencing_install = new_response.toInt();
-            Serial.print("Is Fencing Install: ");
-            Serial.println(is_fencing_install);
-
-            getFormFirebase_state("State/Is_Menu",&http_client);
-            is_menu = new_response.toInt();;
-            Serial.print("Is Menu: ");
-            Serial.println(is_menu); 
-
-            if(buttonCall_isPress == 1 || buttonSMS_isPress == 1 || is_fencing_install == 1 || is_menu == 1) break;
-          }
-          getFormFirebase_state("State/Is_Menu",&http_client);
-          is_menu = new_response.toInt();;
-          Serial.print("Is Menu: ");
-          Serial.println(is_menu); 
-          if(buttonCall_isPress == 1 || buttonSMS_isPress == 1 || is_menu == 1) break;
-        }
-    }
-      //Truong hop khan cap
-      if(buttonCall_isPress){
-        buttonCall_isPress = false;
-        while(latitude == 0 || longitude == 0){
-          while(neogps.available()){
-              gps.encode(neogps.read());
-              latitude = gps.location.lat();
-              longitude = gps.location.lng();
-            }
-        }
-        call_emergency();
-      }
-      if(buttonSMS_isPress){
-        buttonSMS_isPress = false;
-        while(latitude == 0 || longitude == 0){
-          while(neogps.available()){
-              gps.encode(neogps.read());
-              latitude = gps.location.lat();
-              longitude = gps.location.lng();
-            }
-        }
-        SMS_emergency();
-      }
-    //----------------------------------------------------------------
-    }
-  }
-   //----------------------------------------------------------------
